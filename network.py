@@ -17,7 +17,10 @@ def POST_CSV(url: str, csv_content: str):
 
 if __name__ == "__main__":
     url = "https://bci-uscneuro.tech/api/upload"
-    # sample content - may need to change based on api expectation
+    # change this to grab 127 lines of csv data, or add lines sequentially
     csv_content = "message\ntest\n"
 
-    POST_CSV(url, csv_content)
+    # change this condition to post once csv content is 127 rows in size?
+    while True:
+    	POST_CSV(url, csv_content)
+	time.sleep(1)
