@@ -12,7 +12,7 @@ BUFFER_SIZE = SAMPLE_RATE * WINDOW_SIZE  # Total samples for 10 seconds
 
 # Configure the Cyton board
 params = BrainFlowInputParams()
-params.serial_port = "COM4"  # Replace with your actual COM port
+params.serial_port = "ttyusb0"  # Replace with your actual COM port
 board_id = BoardIds.CYTON_DAISY_BOARD.value  # Cyton with Daisy module
 
 try:
