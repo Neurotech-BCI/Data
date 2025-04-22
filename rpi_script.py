@@ -39,10 +39,11 @@ try:
 
             csv_bytes = df.to_csv(index=False).encode('utf-8')
 
-            response = requests.post(
-                upload_url,
-                files={"file": ("eeg_data.csv", csv_bytes, "text/csv")}
-            )
+            headers    = {"Content-Type": "text/csv"}
+            response = requests.post(upload_url,
+                                     data=csv_bytes,
+                                     headers=headers,
+                                     timeout=3.0)
 
             duration = df["timestamp"].iloc[-1] - df["timestamp"].iloc[0]
             print(f"Uploaded {df.shape[0]} samples ({duration:.2f} s) — Status: {response.status_code}")
