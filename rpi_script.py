@@ -6,7 +6,7 @@ from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 
 # Configuration
 params = BrainFlowInputParams()
-params.serial_port = "/dev/cu.usbserial-DM02590G"
+params.serial_port = "/dev/ttyUSB0"
 board_id = BoardIds.CYTON_DAISY_BOARD.value
 upload_url = "https://bci-uscneuro.tech/api/upload"
 SAMPLE_RATE = 127
@@ -25,8 +25,13 @@ try:
     timestamp_channel = BoardShim.get_timestamp_channel(board_id)
     n_samples = SAMPLE_RATE * WINDOW_SIZE
 
+    response = requests.post("https://bci-uscneuro.tech/api/demo/stop")
+    response = requests.post("https://bci-uscneuro.tech/api/demo/start")
+    print(response.text)
+
+    count = 0
     while True:
-        data = board.get_current_board_data(n_samples)
+        data = board.get_board_data(n_samples)
 
         if data.shape[1] >= n_samples:
             eeg_data = data[eeg_channels, :].T
@@ -46,9 +51,19 @@ try:
                                      timeout=3.0)
 
             duration = df["timestamp"].iloc[-1] - df["timestamp"].iloc[0]
-            print(f"Uploaded {df.shape[0]} samples ({duration:.2f} s) — Status: {response.status_code}")
+            print(f"[{count}s elapsed] Uploaded {df.shape[0]} samples ({duration:.2f} s) — Status: {response.status_code}")
+            count += 1
+
+            # server has taken all the data
+            if response.status_code == 204:
+                break
 
         time.sleep(1.0)
+    
+    response = requests.post("https://bci-uscneuro.tech/api/demo/stop")
+    print(response.text)
+
+    
 
 except KeyboardInterrupt:
     print("\nStopped streaming.")
