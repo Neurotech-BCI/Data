@@ -9,70 +9,78 @@ params = BrainFlowInputParams()
 params.serial_port = "/dev/ttyUSB0"
 board_id = BoardIds.CYTON_DAISY_BOARD.value
 upload_url = "https://bci-uscneuro.tech/api/upload"
+
 SAMPLE_RATE = 127
-WINDOW_SIZE = 1  # seconds
+WINDOW_SIZE = 1.0  # seconds
+FRAME_SAMPLES = SAMPLE_RATE
+# use a buffer ~2× as big so you never miss data
+BUFFER_SAMPLES = FRAME_SAMPLES * 2
 
-board = None
+board = BoardShim(board_id, params)
+board.prepare_session()
+board.start_stream()
+print("Streaming…")
 
-try:
-    BoardShim.enable_board_logger()
-    board = BoardShim(board_id, params)
-    board.prepare_session()
-    board.start_stream()
-    print("Streaming EEG data and uploading every second...")
+# get the indices of the EEG and timestamp channels
+eeg_channels   = BoardShim.get_eeg_channels(board_id)
+timestamp_chan = BoardShim.get_timestamp_channel(board_id)
 
-    eeg_channels = BoardShim.get_eeg_channels(board_id)
-    timestamp_channel = BoardShim.get_timestamp_channel(board_id)
-    n_samples = SAMPLE_RATE * WINDOW_SIZE
+last_ts = -np.inf
 
-    response = requests.post("https://bci-uscneuro.tech/api/demo/stop")
-    response = requests.post("https://bci-uscneuro.tech/api/demo/start")
-    print(response.text)
-
-    count = 0
+try:    
+    start_time = time.time()
     while True:
-        data = board.get_board_data(n_samples)
+        # 1) grab a sliding window of recent data
+        data = board.get_current_board_data(BUFFER_SAMPLES)
+        # data.shape == (n_channels, up to BUFFER_SAMPLES)
 
-        if data.shape[1] >= n_samples:
-            eeg_data = data[eeg_channels, :].T
-            timestamps = data[timestamp_channel, :]
+        timestamps = data[timestamp_chan, :]
+        eeg_data   = data[eeg_channels, :]
 
-            df = pd.DataFrame(
-                np.column_stack((timestamps, eeg_data)),
-                columns=["timestamp"] + [f"CH_{i+1}" for i in range(len(eeg_channels))]
-            )
+        # 2) find the first sample strictly newer than last_ts
+        newer = timestamps > last_ts
+        if not np.any(newer):
+            # no new samples yet
+            time.sleep(0.02)
+            continue
 
-            csv_bytes = df.to_csv(index=False).encode('utf-8')
+        idx = np.argmax(newer)  # first True index
 
-            headers    = {"Content-Type": "text/csv"}
-            response = requests.post(upload_url,
-                                     data=csv_bytes,
-                                     headers=headers,
-                                     timeout=3.0)
+        # 3) make sure there are at least FRAME_SAMPLES ahead
+        if timestamps.size - idx < FRAME_SAMPLES:
+            time.sleep(0.02)
+            continue
 
-            duration = df["timestamp"].iloc[-1] - df["timestamp"].iloc[0]
-            print(f"[{count}s elapsed] Uploaded {df.shape[0]} samples ({duration:.2f} s) — Status: {response.status_code}")
-            count += 1
+        # 4) slice out exactly FRAME_SAMPLES
+        new_ts   = timestamps[idx : idx + FRAME_SAMPLES]
+        new_data = eeg_data[:, idx : idx + FRAME_SAMPLES]
 
-            # server has taken all the data
-            if response.status_code == 204:
-                break
+        # 5) update last_ts so we never re-process these
+        last_ts = new_ts[-1]
 
-        time.sleep(1.0)
-    
-    response = requests.post("https://bci-uscneuro.tech/api/demo/stop")
-    print(response.text)
+        # 6) build and upload CSV
+        df = pd.DataFrame(
+            np.column_stack((new_ts, new_data.T)),
+            columns=["timestamp"] + [f"CH_{i+1}" for i in range(len(eeg_channels))]
+        )
+        csv_bytes = df.to_csv(index=False).encode("utf-8")
+        headers   = {"Content-Type": "text/csv"}
 
-    
+        resp = requests.post(upload_url, data=csv_bytes, headers=headers, timeout=3.0)
+        elapsed_time = time.time() - start_time
+        print(f"[{elapsed_time:.2f}s elapsed] Uploaded {FRAME_SAMPLES} samples — Status: {resp.status_code}")
 
-except KeyboardInterrupt:
-    print("\nStopped streaming.")
+        # stop condition if you like:
+        if resp.status_code == 204:
+            break
 
-except Exception as e:
-    print(f"Error: {e}")
+        # 7) throttle so you don’t spin-lock
+        time.sleep(WINDOW_SIZE * 0.8)
 
 finally:
-    if board is not None:
-        board.stop_stream()
-        board.release_session()
-        print("Session closed.")
+    # stop demo
+    print("Stopping demo…")
+    
+    board.stop_stream()
+    board.release_session()
+    print("Session closed.")
